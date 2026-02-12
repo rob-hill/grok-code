@@ -5,7 +5,9 @@ CRITICAL SAFETY: Classifies commands and prevents destructive operations.
 """
 import subprocess
 import re
+import shlex
 from typing import Tuple
+from safety.audit import get_audit_logger
 
 
 class CommandSandbox:
@@ -100,6 +102,13 @@ class CommandSandbox:
         # Check for blocked patterns
         for pattern in CommandSandbox.BLOCKED_PATTERNS:
             if re.search(pattern, command, re.IGNORECASE):
+                # Log blocked command attempt
+                audit_logger = get_audit_logger()
+                audit_logger.log_blocked_operation(
+                    "bash_command",
+                    f"Matched blocked pattern: {pattern}",
+                    {"command": command}
+                )
                 return "blocked", (
                     f"Command blocked for safety: '{command}'. "
                     "This command is destructive and cannot be executed."
@@ -145,9 +154,16 @@ class CommandSandbox:
             Exception: If timeout exceeded
         """
         try:
+            # SECURITY: Use shlex.split() and shell=False to prevent command injection
+            # This prevents shell metacharacter attacks (;, &&, ||, etc.)
+            try:
+                cmd_list = shlex.split(command)
+            except ValueError as e:
+                raise Exception(f"Invalid command syntax: {e}")
+
             result = subprocess.run(
-                command,
-                shell=True,
+                cmd_list,
+                shell=False,  # CRITICAL: Prevents shell injection attacks
                 cwd=cwd,
                 capture_output=True,
                 text=True,

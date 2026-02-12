@@ -68,19 +68,53 @@ class PathValidator:
         if operation == "read":
             return True, ""
 
-        # Convert to absolute path for checking
+        # Convert to absolute path and resolve symlinks for security
         try:
+            # First expand user and make absolute
             abs_path = os.path.abspath(os.path.expanduser(path))
-        except Exception as e:
-            return False, f"Invalid path: {e}"
 
-        # Check for system directory access
-        for dangerous_path in PathValidator.DANGEROUS_PATHS:
-            if abs_path.startswith(dangerous_path + "/") or abs_path == dangerous_path:
+            # SECURITY: Check BEFORE symlink resolution (catches /etc even if it's a symlink)
+            for dangerous_path in PathValidator.DANGEROUS_PATHS:
+                if abs_path.startswith(dangerous_path + "/") or abs_path == dangerous_path:
+                    return False, (
+                        f"Access denied: Cannot {operation} in system directory {dangerous_path}. "
+                        "This operation is blocked for safety."
+                    )
+
+            # Resolve symlinks to prevent symlink attacks
+            # For existing files/directories, resolve the full path
+            # For non-existent files, resolve the parent directory
+            if os.path.exists(abs_path):
+                resolved_path = os.path.realpath(abs_path)
+            else:
+                # Resolve parent directory, then append filename
+                parent = os.path.dirname(abs_path)
+                filename = os.path.basename(abs_path)
+                if os.path.exists(parent):
+                    resolved_path = os.path.join(os.path.realpath(parent), filename)
+                else:
+                    resolved_path = abs_path
+
+            # SECURITY: Check AFTER symlink resolution (catches /private/etc on macOS)
+            for dangerous_path in PathValidator.DANGEROUS_PATHS:
+                if resolved_path.startswith(dangerous_path + "/") or resolved_path == dangerous_path:
+                    return False, (
+                        f"Access denied: Cannot {operation} in system directory {dangerous_path}. "
+                        "This operation is blocked for safety."
+                    )
+
+            # Also check for /private/* paths on macOS
+            if resolved_path.startswith("/private/etc/") or resolved_path.startswith("/private/usr/"):
                 return False, (
-                    f"Access denied: Cannot {operation} in system directory {dangerous_path}. "
+                    f"Access denied: Cannot {operation} in system directory. "
                     "This operation is blocked for safety."
                 )
+
+            # Use resolved path for further checks
+            abs_path = resolved_path
+
+        except Exception as e:
+            return False, f"Invalid path: {e}"
 
         # Check for sensitive files (warn but allow)
         path_lower = abs_path.lower()

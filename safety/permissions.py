@@ -4,6 +4,7 @@ Permission management for user approval of risky operations.
 Implements permission requests with session caching.
 """
 from typing import Dict, Any
+from safety.audit import get_audit_logger
 
 
 class PermissionManager:
@@ -16,6 +17,7 @@ class PermissionManager:
     def __init__(self):
         """Initialize permission manager with empty cache."""
         self.permission_cache: Dict[str, bool] = {}
+        self.audit_logger = get_audit_logger()
 
     def request_permission(
         self,
@@ -34,7 +36,10 @@ class PermissionManager:
         """
         # Check cache first
         if operation in self.permission_cache:
-            return self.permission_cache[operation]
+            cached_response = self.permission_cache[operation]
+            # Log cached response
+            self.audit_logger.log_permission_request(operation, cached_response, {"cached": True})
+            return cached_response
 
         # Format permission request
         print("\n" + "=" * 60)
@@ -57,18 +62,22 @@ class PermissionManager:
             response = input("Allow? (y/n/always/never): ").strip().lower()
 
             if response in ['y', 'yes']:
+                self.audit_logger.log_permission_request(operation, True, details)
                 return True
             elif response in ['n', 'no']:
+                self.audit_logger.log_permission_request(operation, False, details)
                 return False
             elif response == 'always':
                 # Cache approval for session
                 self.permission_cache[operation] = True
                 print(f"✓ '{operation}' will be auto-approved for this session.")
+                self.audit_logger.log_permission_request(operation, True, {**details, "cached": "always"})
                 return True
             elif response == 'never':
                 # Cache denial for session
                 self.permission_cache[operation] = False
                 print(f"✗ '{operation}' will be auto-denied for this session.")
+                self.audit_logger.log_permission_request(operation, False, {**details, "cached": "never"})
                 return False
             else:
                 print("Invalid response. Please enter y, n, always, or never.")

@@ -9,8 +9,77 @@ Implements the tool execution loop:
 """
 import requests
 import json
+import time
 from typing import List, Dict, Any, Callable, Optional
 from core.config import get_config
+
+
+class RateLimiter:
+    """
+    Simple rate limiter to prevent API abuse and cost overruns.
+
+    Tracks API calls and enforces limits.
+    """
+
+    def __init__(self, max_calls_per_minute: int = 60, max_calls_per_session: int = 200):
+        """
+        Initialize rate limiter.
+
+        Args:
+            max_calls_per_minute: Maximum API calls per minute
+            max_calls_per_session: Maximum total API calls per session
+        """
+        self.max_calls_per_minute = max_calls_per_minute
+        self.max_calls_per_session = max_calls_per_session
+        self.call_times = []
+        self.total_calls = 0
+
+    def check_and_wait(self) -> None:
+        """
+        Check rate limits and wait if necessary.
+
+        Raises:
+            Exception: If session limit exceeded
+        """
+        now = time.time()
+
+        # Check session limit
+        if self.total_calls >= self.max_calls_per_session:
+            raise Exception(
+                f"Session API call limit reached ({self.max_calls_per_session} calls). "
+                "This prevents cost overruns. Restart to reset."
+            )
+
+        # Remove calls older than 1 minute
+        self.call_times = [t for t in self.call_times if now - t < 60]
+
+        # Check per-minute limit
+        if len(self.call_times) >= self.max_calls_per_minute:
+            # Calculate wait time
+            oldest_call = self.call_times[0]
+            wait_time = 60 - (now - oldest_call)
+            if wait_time > 0:
+                print(f"⏱️  Rate limit: Waiting {wait_time:.1f}s before next API call...")
+                time.sleep(wait_time)
+                now = time.time()
+
+        # Record this call
+        self.call_times.append(now)
+        self.total_calls += 1
+
+    def get_stats(self) -> Dict[str, int]:
+        """Get rate limiter statistics."""
+        now = time.time()
+        recent_calls = len([t for t in self.call_times if now - t < 60])
+        return {
+            "total_calls": self.total_calls,
+            "calls_last_minute": recent_calls,
+            "remaining_session_calls": self.max_calls_per_session - self.total_calls
+        }
+
+
+# Global rate limiter instance
+_rate_limiter = RateLimiter()
 
 
 def call_api(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -29,9 +98,15 @@ def call_api(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dic
     """
     config = get_config()
 
+    # SECURITY: Check rate limits before making API call
+    _rate_limiter.check_and_wait()
+
     headers = {
         "Authorization": f"Bearer {config.api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        # SECURITY: Add security headers
+        "User-Agent": "grok-code/1.0",
+        "X-Client-Version": "1.0.0"
     }
 
     payload = {
